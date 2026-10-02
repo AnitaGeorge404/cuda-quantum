@@ -7,6 +7,7 @@
  ******************************************************************************/
 
 #include "PassDetails.h"
+#include "cudaq/Optimizer/Builder/Factory.h"
 #include "cudaq/Optimizer/Builder/Intrinsics.h"
 #include "cudaq/Optimizer/Transforms/Passes.h"
 #include "llvm/ADT/SmallPtrSet.h"
@@ -495,6 +496,19 @@ public:
       //    b) Otherwise this is "unbounded" stack growth, so pin it.
       analysis.pinned.push_back(cand);
     }
+
+    // A cc.scope region fence that is not itself enclosed by any repeating
+    // construct runs at most once per activation of \p root. Record that on
+    // the scope: lowering it to CFG later can then skip the stacksave/
+    // stackrestore pair it would otherwise need, since nothing repeats to
+    // reclaim storage between and no escaping allocation has any reason to
+    // be freed early. This is what makes it safe for stack-frame-prealloc to
+    // run before lower-to-cfg instead of only after it.
+    for (Operation *fence : analysis.regionFences)
+      if (isa<cudaq::cc::ScopeOp>(fence) &&
+          !analysis.findEnclosingLoop(fence))
+        fence->setAttr(cudaq::opt::scopeRunsOnceAttrName,
+                       UnitAttr::get(fence->getContext()));
 
     DenseSet<func::CallOp> pinnedCalls;
     for (auto pin : analysis.pinned) {

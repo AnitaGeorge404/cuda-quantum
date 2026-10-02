@@ -7,6 +7,7 @@
  ******************************************************************************/
 
 #include "PassDetails.h"
+#include "cudaq/Optimizer/Builder/Factory.h"
 #include "cudaq/Optimizer/Builder/Intrinsics.h"
 #include "cudaq/Optimizer/Builder/Runtime.h"
 #include "cudaq/Optimizer/Transforms/Passes.h"
@@ -61,7 +62,14 @@ public:
         fn->setAttr(cudaq::opt::disableQubitCombineAttrName,
                     UnitAttr::get(scopeOp.getContext()));
 
-    if (scopeOp.hasClassicalAllocation()) {
+    // A scope that stack-frame-prealloc has already proven runs at most once
+    // (cc.scope_runs_once) needs no stacksave/stackrestore fence: nothing
+    // repeats to reclaim storage between, and any allocation escaping the
+    // scope is free to outlive it. This lets stack-frame-prealloc run before
+    // this pass without losing the cleanup it used to only get a chance to
+    // do by running after it.
+    if (scopeOp.hasClassicalAllocation() &&
+        !scopeOp->hasAttr(cudaq::opt::scopeRunsOnceAttrName)) {
       auto call = func::CallOp::create(rewriter, loc, ptrTy,
                                        cudaq::llvmStackSave, ArrayRef<Value>{});
       stackSave = call.getResult(0);

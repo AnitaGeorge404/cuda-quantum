@@ -1,0 +1,65 @@
+// ========================================================================== //
+// Copyright (c) 2026 NVIDIA Corporation & Affiliates.                        //
+// All rights reserved.                                                       //
+//                                                                            //
+// This source code and the accompanying materials are made available under   //
+// the terms of the Apache License 2.0 which accompanies this distribution.   //
+// ========================================================================== //
+
+// RUN: cudaq-opt --verify-each \
+// RUN:   "--lower-wireset-to-profile-qir=convert-to=qir-base" %s \
+// RUN:   | FileCheck %s
+
+// Models the unrolled shape of a loop-local classical array used for a
+// quantum rotation parameter, lowered through the wireset-to-profile-QIR
+// pipeline (as used by a hardware/emulated target such as "oqc"):
+//
+//   for i in range(2):
+//       angles = [0.5, 0.25]
+//       rx(angles[i], q[i])
+//
+// stack-frame-prealloc must run in this pipeline for the result to be valid
+// base-profile QIR: without it, lower-to-cfg's scope lowering leaves behind
+// llvm.stacksave/llvm.stackrestore calls, which the base profile forbids
+// (any call whose callee is not "__quantum_..." is rejected).
+quake.wire_set @wires[2]
+
+func.func @loop_local_angles() attributes {"cudaq-entrypoint", "cudaq-kernel"} {
+  %c2 = arith.constant 2 : i64
+  %a0 = arith.constant 5.000000e-01 : f64
+  %a1 = arith.constant 2.500000e-01 : f64
+  %w0 = quake.borrow_wire @wires[0] : !quake.wire
+  %w1 = quake.borrow_wire @wires[1] : !quake.wire
+
+  %r0 = cc.scope -> (!quake.wire) {
+    %angles = cc.alloca f64[%c2 : i64]
+    %p0 = cc.compute_ptr %angles[0] : (!cc.ptr<!cc.array<f64 x ?>>) -> !cc.ptr<f64>
+    cc.store %a0, %p0 : !cc.ptr<f64>
+    %p1 = cc.compute_ptr %angles[1] : (!cc.ptr<!cc.array<f64 x ?>>) -> !cc.ptr<f64>
+    cc.store %a1, %p1 : !cc.ptr<f64>
+    %elt = cc.compute_ptr %angles[0] : (!cc.ptr<!cc.array<f64 x ?>>) -> !cc.ptr<f64>
+    %theta = cc.load %elt : !cc.ptr<f64>
+    %nw = quake.rx (%theta) %w0 : (f64, !quake.wire) -> !quake.wire
+    cc.continue %nw : !quake.wire
+  }
+  %r1 = cc.scope -> (!quake.wire) {
+    %angles = cc.alloca f64[%c2 : i64]
+    %p0 = cc.compute_ptr %angles[0] : (!cc.ptr<!cc.array<f64 x ?>>) -> !cc.ptr<f64>
+    cc.store %a0, %p0 : !cc.ptr<f64>
+    %p1 = cc.compute_ptr %angles[1] : (!cc.ptr<!cc.array<f64 x ?>>) -> !cc.ptr<f64>
+    cc.store %a1, %p1 : !cc.ptr<f64>
+    %elt = cc.compute_ptr %angles[1] : (!cc.ptr<!cc.array<f64 x ?>>) -> !cc.ptr<f64>
+    %theta = cc.load %elt : !cc.ptr<f64>
+    %nw = quake.rx (%theta) %w1 : (f64, !quake.wire) -> !quake.wire
+    cc.continue %nw : !quake.wire
+  }
+
+  quake.return_wire %r0 : !quake.wire
+  quake.return_wire %r1 : !quake.wire
+  return
+}
+
+// CHECK-NOT: llvm.call @llvm.stacksave.p0
+// CHECK-NOT: llvm.call @llvm.stackrestore.p0
+// CHECK: llvm.call @__quantum__qis__rx__body
+// CHECK: llvm.call @__quantum__qis__rx__body

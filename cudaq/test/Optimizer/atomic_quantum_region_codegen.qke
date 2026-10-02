@@ -70,9 +70,10 @@ func.func @exposed_roundtrip() attributes {"cudaq-entrypoint", "cudaq-kernel"} {
 }
 
 // Models the post-inlining shape of a cudaq.run kernel returning a dynamic
-// sequence. Lowering its scope inserts stack save/restore operations around
-// the classical allocation. The final StackFramePrealloc must remove the
-// premature restore so the backing storage remains live through output.
+// sequence. StackFramePrealloc runs before the scope is lowered to CFG and
+// marks it as running at most once, so lowering it does not wrap the
+// classical allocation in a stacksave/stackrestore pair that would free the
+// backing storage before it is read through output.
 func.func @run_dynamic_result(%size: i64) attributes {"cudaq-entrypoint", "cudaq-kernel", quake.cudaq_run = [!cc.sequence<i64>]} {
   %result = cc.scope -> (!cc.sequence<i64>) {
     %storage = cc.alloca i64[%size : i64]
@@ -151,22 +152,23 @@ func.func @run_dynamic_result(%size: i64) attributes {"cudaq-entrypoint", "cudaq
 // NO_OPT-NOT:   llvm.stackrestore
 // NO_OPT:       llvm.return
 
+// StackFramePrealloc now runs once, in the common pipeline, over the still-
+// structured IR, before lower-to-cfg; it is not re-invoked after lower-to-cfg
+// runs further down (unlike before, lower-to-cfg does not need it to run
+// again afterward -- see the comment on cc.scope_runs_once in Factory.h).
 // PIPELINE: Pass Manager
 // PIPELINE-NOT: convert-to-cfg
-// PIPELINE-NOT: stack-frame-prealloc
+// PIPELINE: stack-frame-prealloc
+// PIPELINE-NOT: convert-to-cfg
 // PIPELINE: combine-quantum-alloc
 // PIPELINE-NOT: convert-to-cfg
 // PIPELINE-NOT: stack-frame-prealloc
 // PIPELINE: factor-quantum-alloc
 // PIPELINE-NOT: combine-quantum-alloc
-// PIPELINE-NOT: convert-to-cfg
 // PIPELINE-NOT: stack-frame-prealloc
 // PIPELINE: convert-to-cfg-prep,
 // PIPELINE-NEXT: func.func(
 // PIPELINE-NEXT: convert-to-cfg
-// PIPELINE-NEXT: ),
-// PIPELINE-NEXT: func.func(
-// PIPELINE-NEXT: stack-frame-prealloc
 // PIPELINE-NEXT: ),
 // PIPELINE-NEXT: func.func(
 // PIPELINE-NEXT: canonicalize
@@ -178,6 +180,7 @@ func.func @run_dynamic_result(%size: i64) attributes {"cudaq-entrypoint", "cudaq
 // PIPELINE: convert-to-cfg-prep
 // PIPELINE: convert-to-cfg
 // PIPELINE-NOT: combine-quantum-alloc
+// PIPELINE-NOT: stack-frame-prealloc
 
 // ALLOC: combine-quantum-alloc
 // ALLOC-NOT: combine-quantum-alloc

@@ -209,3 +209,50 @@ func.func @cfg_loop_in_scope(%n: i1) {
 // CHECK:           }
 // CHECK:           return
 // CHECK:         }
+
+// A top-level cc.scope runs at most once per activation of the enclosing
+// function, so stack-frame-prealloc marks it cc.scope_runs_once: a later
+// lower-to-cfg can skip fencing its dynamically sized, escaping allocation
+// with a stacksave/stackrestore pair (see to_cfg.qke for that half).
+func.func @top_level_scope_runs_once(%size: i64) -> !cc.sequence<i64> {
+  %r = cc.scope -> (!cc.sequence<i64>) {
+    %storage = cc.alloca i64[%size : i64]
+    %seq = cc.sequence_init %storage, %size : (!cc.ptr<!cc.array<i64 x ?>>, i64) -> !cc.sequence<i64>
+    cc.continue %seq : !cc.sequence<i64>
+  }
+  return %r : !cc.sequence<i64>
+}
+
+// The same scope shape, but nested in a cc.loop's `do` region: it runs once
+// per iteration, not once per activation, so it must NOT be marked.
+func.func @loop_body_scope_runs_per_iteration(%n: i32, %size: i64) {
+  %c0 = arith.constant 0 : i32
+  %c1 = arith.constant 1 : i32
+  %i = cc.alloca i32
+  cc.store %c0, %i : !cc.ptr<i32>
+  cc.loop while {
+    %iv = cc.load %i : !cc.ptr<i32>
+    %cond = arith.cmpi ult, %iv, %n : i32
+    cc.condition %cond
+  } do {
+    cc.scope {
+      %storage = cc.alloca i64[%size : i64]
+      %seq = cc.sequence_init %storage, %size : (!cc.ptr<!cc.array<i64 x ?>>, i64) -> !cc.sequence<i64>
+      cc.continue
+    }
+    cc.continue
+  } step {
+    %iv = cc.load %i : !cc.ptr<i32>
+    %nx = arith.addi %iv, %c1 : i32
+    cc.store %nx, %i : !cc.ptr<i32>
+  }
+  return
+}
+
+// CHECK-LABEL:   func.func @top_level_scope_runs_once(
+// CHECK:           cc.scope -> (!cc.sequence<i64>) {
+// CHECK:           } {cc.scope_runs_once}
+
+// CHECK-LABEL:   func.func @loop_body_scope_runs_per_iteration(
+// CHECK-NOT:       cc.scope_runs_once
+// CHECK:           return

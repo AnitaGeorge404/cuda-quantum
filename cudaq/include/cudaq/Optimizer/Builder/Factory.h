@@ -45,6 +45,18 @@ T convertBitsToBytes(T bits) {
 
 constexpr const char disableQubitCombineAttrName[] = "cc.no_qubit_combine";
 
+/// Marks a `cc.scope` that stack-frame-prealloc has proven runs at most once
+/// per activation of its enclosing scope (it is not nested in any `cc.loop`
+/// or lowered-CFG cycle). Lowering such a scope to a flat CFG does not need
+/// an `llvm.stacksave`/`llvm.stackrestore` pair around it: nothing repeats,
+/// so there is nothing to reclaim between repetitions, and a dynamically
+/// sized allocation that escapes the scope (e.g. backing storage for a
+/// returned list) is free to simply outlive it. See the comment on
+/// `stack-frame-prealloc`'s scope-marking step in StackFramePrealloc.cpp and
+/// on its use in LowerToCFG.cpp for why this makes stack-frame-prealloc's
+/// pipeline position independent of lower-to-cfg's.
+constexpr const char scopeRunsOnceAttrName[] = "cc.scope_runs_once";
+
 namespace factory {
 
 constexpr const char targetTripleAttrName[] = "llvm.triple";
